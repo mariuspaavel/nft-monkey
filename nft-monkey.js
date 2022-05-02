@@ -38,6 +38,8 @@ var _a = require('path'), resolve = _a.resolve, parse = _a.parse;
 var fs = require('fs');
 var cliProgress = require('cli-progress');
 var sharp = require('sharp');
+var cliPrompt = require('prompt');
+var pressAnyKey = require('press-any-key');
 function shuffleArray(array) {
     var _a;
     var currentIndex = array.length, randomIndex;
@@ -73,14 +75,14 @@ function maxDimensions(list) {
     return max;
 }
 var Project = /** @class */ (function () {
-    function Project(projectPath) {
+    function Project(projectPath, meta) {
         this.tribes = [];
         var tribedirs = fs.readdirSync(projectPath);
         for (var _i = 0, tribedirs_1 = tribedirs; _i < tribedirs_1.length; _i++) {
             var tribedir = tribedirs_1[_i];
             var tribePath = resolve(projectPath, tribedir);
             if (fs.statSync(tribePath).isDirectory()) {
-                this.tribes.push(new Tribe(tribePath));
+                this.tribes.push(new Tribe(tribePath, meta));
             }
         }
     }
@@ -111,12 +113,13 @@ var Project = /** @class */ (function () {
         var arrangement = [];
         this.tribes.forEach(function (tribe) { return arrangement.push.apply(arrangement, tribe.generateArrangement()); });
         shuffleArray(arrangement);
+        arrangement.forEach(function (v, i) { return v.index = i; });
         return arrangement;
     };
     return Project;
 }());
 var Tribe = /** @class */ (function () {
-    function Tribe(tribePath) {
+    function Tribe(tribePath, meta) {
         this.wClasses = [];
         this.totalWeight = 0;
         var _a = getPathNameAndNumber(tribePath), name = _a[0], amount = _a[1];
@@ -127,9 +130,9 @@ var Tribe = /** @class */ (function () {
             var wclassdir = wclassdirs_1[_i];
             var wclassPath = resolve(tribePath, wclassdir);
             if (fs.statSync(wclassPath).isDirectory()) {
-                var wClass = new WClass(wclassPath);
+                var wClass = new WClass(wclassPath, meta);
                 this.totalWeight += wClass.weight;
-                this.wClasses.push(new WClass(wclassPath));
+                this.wClasses.push(new WClass(wclassPath, meta));
             }
         }
     }
@@ -165,13 +168,14 @@ var Tribe = /** @class */ (function () {
     return Tribe;
 }());
 var WClass = /** @class */ (function () {
-    function WClass(wClassPath) {
+    function WClass(wClassPath, meta) {
         var _this = this;
         this.totalPossible = 1;
         this.bodyPartLists = [];
         var _a = getPathNameAndNumber(wClassPath), name = _a[0], weight = _a[1];
         this.name = name;
         this.weight = weight || 1;
+        this.projectMeta = meta;
         var bodypartlists = fs.readdirSync(wClassPath);
         for (var _i = 0, bodypartlists_1 = bodypartlists; _i < bodypartlists_1.length; _i++) {
             var bodypartlist = bodypartlists_1[_i];
@@ -228,7 +232,7 @@ var WClass = /** @class */ (function () {
         return arrangement;
     };
     WClass.prototype.generate = function () {
-        return new NFT(this.bodyPartLists.map(function (bodyPartList) { return bodyPartList.chooseRandom(); }), this);
+        return new NFT(this.bodyPartLists.map(function (bodyPartList) { return bodyPartList.chooseRandom(); }), this, this.projectMeta);
     };
     return WClass;
 }());
@@ -243,7 +247,7 @@ var BodyPartList = /** @class */ (function () {
             var bodypartfile = bodypartfiles_1[_i];
             var bodyPartPath = resolve(bodyPartListPath, bodypartfile);
             if (!fs.statSync(bodyPartPath).isDirectory()) {
-                this.bodyParts.push(new BodyPart(bodyPartPath));
+                this.bodyParts.push(new BodyPart(bodyPartPath, this.name));
             }
         }
         this.bodyParts.forEach(function (bodyPart) { return _this.totalWeight += bodyPart.weight; });
@@ -286,10 +290,11 @@ var BodyPartList = /** @class */ (function () {
     return BodyPartList;
 }());
 var BodyPart = /** @class */ (function () {
-    function BodyPart(path) {
+    function BodyPart(path, listName) {
         var _a = getPathNameAndNumber(path), name = _a[0], weight = _a[1];
         this.name = name;
         this.weight = weight || 1;
+        this.listName = listName;
         this.fullPath = path;
     }
     BodyPart.prototype.load = function () {
@@ -316,9 +321,10 @@ var BodyPart = /** @class */ (function () {
     return BodyPart;
 }());
 var NFT = /** @class */ (function () {
-    function NFT(bodyParts, wClass) {
+    function NFT(bodyParts, wClass, meta) {
         this.bodyParts = bodyParts;
         this.wClass = wClass;
+        this.projectMeta = meta;
     }
     NFT.prototype.equals = function (other) {
         if (this.bodyParts.length != other.bodyParts.length) {
@@ -354,42 +360,82 @@ var NFT = /** @class */ (function () {
             });
         });
     };
+    Object.defineProperty(NFT.prototype, "meta", {
+        get: function () {
+            return {
+                name: this.projectMeta.name + "#" + (this.index + 1),
+                image: "To be replaced",
+                edition: this.index + 1,
+                description: this.projectMeta.description,
+                attributes: this.bodyParts.map(function (bodyPart) {
+                    return {
+                        trait_type: bodyPart.listName,
+                        value: bodyPart.name
+                    };
+                })
+            };
+        },
+        enumerable: false,
+        configurable: true
+    });
     return NFT;
 }());
+var ProjectMeta = /** @class */ (function () {
+    function ProjectMeta() {
+    }
+    return ProjectMeta;
+}());
+var NFTMeta = /** @class */ (function () {
+    function NFTMeta() {
+    }
+    return NFTMeta;
+}());
+var NFTAttribute = /** @class */ (function () {
+    function NFTAttribute() {
+    }
+    return NFTAttribute;
+}());
 function run() {
-    var _a, _b;
     return __awaiter(this, void 0, void 0, function () {
-        var inputPath, outputPath, project, nfts, bar1, i, nft;
-        return __generator(this, function (_c) {
-            switch (_c.label) {
-                case 0:
-                    inputPath = resolve((_a = process.argv[2]) !== null && _a !== void 0 ? _a : 'input');
-                    outputPath = resolve((_b = process.argv[3]) !== null && _b !== void 0 ? _b : 'output');
-                    project = new Project(inputPath);
-                    return [4 /*yield*/, project.load()];
+        var _a, inputPath, outputPath, name, description, projectMeta, project, nfts, imagesPath, metadataPath, bar1, i, nft;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
+                case 0: return [4 /*yield*/, cliPrompt.get(['inputPath', 'outputPath', 'name', 'description'])];
                 case 1:
-                    _c.sent();
+                    _a = _b.sent(), inputPath = _a.inputPath, outputPath = _a.outputPath, name = _a.name, description = _a.description;
+                    inputPath = resolve(inputPath);
+                    outputPath = resolve(outputPath);
+                    projectMeta = { name: name, description: description };
+                    project = new Project(inputPath, projectMeta);
+                    return [4 /*yield*/, project.load()];
+                case 2:
+                    _b.sent();
                     nfts = project.generateArrangement();
-                    //console.log(nfts);
                     fs.mkdirSync(outputPath);
+                    imagesPath = resolve(outputPath, 'images');
+                    metadataPath = resolve(outputPath, 'metadata');
+                    fs.mkdirSync(imagesPath);
+                    fs.mkdirSync(metadataPath);
                     bar1 = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
                     bar1.start(nfts.length, 0);
                     i = 0;
-                    _c.label = 2;
-                case 2:
-                    if (!(i < nfts.length)) return [3 /*break*/, 5];
+                    _b.label = 3;
+                case 3:
+                    if (!(i < nfts.length)) return [3 /*break*/, 6];
                     nft = nfts[i];
                     return [4 /*yield*/, nft.render()];
-                case 3:
-                    _c.sent();
-                    nft.renderedImage.toFile(resolve(outputPath, i + ".png"));
-                    bar1.update(i + 1);
-                    _c.label = 4;
                 case 4:
-                    i++;
-                    return [3 /*break*/, 2];
+                    _b.sent();
+                    nft.renderedImage.toFile(resolve(outputPath, 'images', nft.index + 1 + '.png'));
+                    fs.writeFileSync(resolve(metadataPath, nft.index + 1 + '.json'), JSON.stringify(nft.meta, null, 2));
+                    bar1.update(i + 1);
+                    _b.label = 5;
                 case 5:
+                    i++;
+                    return [3 /*break*/, 3];
+                case 6:
                     bar1.stop();
+                    pressAnyKey('Completed, press any key to exit...');
                     return [2 /*return*/];
             }
         });

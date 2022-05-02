@@ -3,6 +3,8 @@ const {resolve, parse} = require('path');
 const fs = require('fs');
 const cliProgress = require('cli-progress');
 const sharp = require('sharp');
+const cliPrompt = require('prompt');
+const pressAnyKey = require('press-any-key');
 
 function shuffleArray(array: any[]) {
     let currentIndex = array.length,  randomIndex;
@@ -54,7 +56,7 @@ class Project{
 
     tribes: Tribe[] = [];
 
-    constructor(projectPath: string){
+    constructor(projectPath: string, meta: ProjectMeta){
 
         const tribedirs = fs.readdirSync(projectPath);
 
@@ -62,7 +64,7 @@ class Project{
 
             const tribePath = resolve(projectPath, tribedir);
             if(fs.statSync(tribePath).isDirectory()){
-                this.tribes.push(new Tribe(tribePath));
+                this.tribes.push(new Tribe(tribePath, meta));
             }
 
 
@@ -83,6 +85,7 @@ class Project{
         this.tribes.forEach(tribe => arrangement.push(...tribe.generateArrangement()));
 
         shuffleArray(arrangement);
+        arrangement.forEach((v, i) => v.index = i);
 
         return arrangement;
     }
@@ -96,7 +99,7 @@ class Tribe{
     wClasses: WClass[] = [];
     totalWeight: number = 0;
 
-    constructor(tribePath: string){
+    constructor(tribePath: string, meta: ProjectMeta){
 
         const [name, amount] = getPathNameAndNumber(tribePath);
         this.name = name;
@@ -108,9 +111,9 @@ class Tribe{
 
             const wclassPath = resolve(tribePath, wclassdir);
             if(fs.statSync(wclassPath).isDirectory()){
-                const wClass = new WClass(wclassPath);
+                const wClass = new WClass(wclassPath, meta);
                 this.totalWeight += wClass.weight;
-                this.wClasses.push(new WClass(wclassPath));
+                this.wClasses.push(new WClass(wclassPath, meta));
             }
 
         }
@@ -142,16 +145,18 @@ class WClass{
 
     name: string;
     weight: number;
+    projectMeta: ProjectMeta;
     totalPossible: number = 1;
     maxDimensions: [number, number];
 
     bodyPartLists: BodyPartList[] = [];
 
-    constructor(wClassPath: string){
+    constructor(wClassPath: string, meta: ProjectMeta){
 
         const [name, weight] = getPathNameAndNumber(wClassPath);
         this.name = name;
         this.weight = weight || 1;
+        this.projectMeta = meta;
 
         const bodypartlists = fs.readdirSync(wClassPath);
 
@@ -201,7 +206,7 @@ class WClass{
 
     generate(): NFT{
 
-        return new NFT(this.bodyPartLists.map(bodyPartList => bodyPartList.chooseRandom()), this);
+        return new NFT(this.bodyPartLists.map(bodyPartList => bodyPartList.chooseRandom()), this, this.projectMeta);
 
     }
 
@@ -223,7 +228,7 @@ class BodyPartList{
 
             const bodyPartPath = resolve(bodyPartListPath, bodypartfile);
             if(!fs.statSync(bodyPartPath).isDirectory()){
-                this.bodyParts.push(new BodyPart(bodyPartPath));
+                this.bodyParts.push(new BodyPart(bodyPartPath, this.name));
             }
 
         }
@@ -262,16 +267,17 @@ class BodyPart{
 
     name: string;
     weight: number;
+    listName: string;
     fullPath: string;
     image: any;
     dimensions: [number, number];
 
-    constructor(path: string){
+    constructor(path: string, listName: string){
 
         const [name, weight] = getPathNameAndNumber(path);
         this.name = name;
         this.weight = weight || 1;
-
+        this.listName = listName;
         this.fullPath = path;
 
     }
@@ -291,12 +297,15 @@ class NFT{
 
     bodyParts: BodyPart[];
     wClass: WClass;
+    projectMeta: ProjectMeta;
     renderedImage: any;
+    index: number;
 
-    constructor(bodyParts: BodyPart[], wClass: WClass){
+    constructor(bodyParts: BodyPart[], wClass: WClass, meta: ProjectMeta){
 
         this.bodyParts = bodyParts;
         this.wClass = wClass;
+        this.projectMeta = meta;
 
     }
 
@@ -330,24 +339,71 @@ class NFT{
 
     }
 
+    get meta(): NFTMeta{
+        return {
+            name: `${this.projectMeta.name}#${this.index + 1}`,
+            image: "To be replaced",
+            edition: this.index + 1,
+            description: this.projectMeta.description,
+            attributes: this.bodyParts.map(bodyPart => {return{
+                trait_type: bodyPart.listName,
+                value: bodyPart.name
+            }})
+        };
+    }
+
 }
 
+class ProjectMeta {
+
+    name: string;
+    description: string;
+
+}
+
+class NFTMeta {
+
+    name: string;
+    description: string;
+    image: string;
+    edition: number;
+    attributes: NFTAttribute[];
+
+}
+
+class NFTAttribute{
+
+    trait_type: string;
+    value: string;
+
+}
 
 
 
 async function run(){
 
-    const inputPath = resolve(process.argv[2] ?? 'input');
-    const outputPath = resolve(process.argv[3] ?? 'output');
+    let {inputPath, outputPath, name, description} =
+        await cliPrompt.get(['inputPath', 'outputPath', 'name', 'description']);
+
+    inputPath = resolve(inputPath);
+    outputPath = resolve(outputPath);
+
+    // const inputPath = resolve(process.argv[2] ?? 'input');
+    // const outputPath = resolve(process.argv[3] ?? 'output');
 
     //console.log(inputPath);
+    const projectMeta = {name, description};
 
-    const project = new Project(inputPath);
+    const project = new Project(inputPath, projectMeta);
     await project.load();
     //console.log(JSON.stringify(project, null, 2));
     const nfts = project.generateArrangement();
-    //console.log(nfts);
+
     fs.mkdirSync(outputPath);
+    const imagesPath = resolve(outputPath, 'images');
+    const metadataPath = resolve(outputPath, 'metadata');
+    fs.mkdirSync(imagesPath);
+    fs.mkdirSync(metadataPath);
 
     const bar1 = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
     bar1.start(nfts.length, 0);
@@ -355,13 +411,17 @@ async function run(){
     for(let i = 0; i < nfts.length; i++){
         const nft = nfts[i];
         await nft.render();
-        nft.renderedImage.toFile(resolve(outputPath, i + ".png"));
+        nft.renderedImage.toFile(resolve(outputPath, 'images', nft.index + 1 + '.png'));
+        fs.writeFileSync(
+            resolve(metadataPath, nft.index + 1 + '.json'),
+            JSON.stringify(nft.meta, null, 2)
+        );
         bar1.update(i + 1);
     }
 
     bar1.stop();
-//
-// console.log(JSON.stringify(project, null, 2));
+
+    pressAnyKey('Completed, press any key to exit...');
 
 }
 
